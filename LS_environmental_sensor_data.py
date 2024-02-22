@@ -4,7 +4,18 @@ import csv
 import threading
 from datetime import datetime
 import time
+from pathlib import Path
 
+excel_file = r'c:\Users\User\Documents\Git Repository\LOG experimental settings.xlsx' 
+
+# Check if the file exists
+if os.path.isfile(excel_file):
+    # Open the file with the default application
+    os.startfile(excel_file)
+else:
+    print(f"File '{excel_file}' not found.")
+
+    
 # Define the serial ports and baud rate (adjust as needed)
 ser1 = serial.Serial('COM22', 9600)     # Heater
 ser2 = serial.Serial('COM15', 115200)   # SHT 20
