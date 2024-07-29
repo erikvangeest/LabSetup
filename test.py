@@ -1,0 +1,1773 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+import scipy
+from scipy import interpolate
+from scipy import optimize
+from scipy.optimize import minimize
+from scipy.misc import derivative
+from scipy.optimize import fmin
+from scipy.optimize import curve_fit
+from scipy.optimize import fsolve
+from smartsense2.cloud.clients import get_data
+import re
+import datetime
+import matplotlib.dates as mdates
+from matplotlib.dates import DayLocator, HourLocator, DateFormatter, drange
+import calendar
+from datetime import datetime
+from scipy.optimize import minimize_scalar
+
+from scipy.interpolate import interp1d
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.figure import Figure
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Image
+from io import BytesIO
+from matplotlib.figure import Figure
+
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Table, TableStyle, PageBreak  # Import PageBreak for adding a new page
+from PIL import Image as PILImage
+from io import BytesIO
+import os
+import warnings
+
+# To suppress all warnings
+warnings.filterwarnings("ignore")
+
+# constants
+
+e = 1.602176634e-19 # elementary charge in coulombs
+hbar = 1.054571817e-34 # reduced planck constant in joule seconds
+nu_F = 1e6 # fermi velocity electrons in graphene in m/s
+C_ox = 0.26e-5 # geometric capacitance F/cm^2 (F/m^2?)
+mu = 8600
+N_sq = 1 # no clue what this is
+n_0 = 1e15
+R_contact = 0
+
+a = e/C_ox
+b = (hbar*nu_F*np.sqrt(np.pi))/e
+
+def n(V):
+    return (b**2 + 2*a*V + np.sqrt(b**4 + 4*a*(b**2)*np.abs(V)))/(2*a**2)
+
+def R_total(V,R_c,n_0_,mu_,V_0):
+    return R_c + N_sq/(np.sqrt(n_0_**2 + n(V-V_0)**2)*e*mu_)
+
+def fit(V_data, R_data):
+    opt, cov = curve_fit(R_total, V_data, R_data, p0=[1050,0.42e14,2.35e1,16.7])
+    return opt
+
+def derivative_R_total(V, R_c,n_0_,mu_,V_0):
+    return derivative(R_total, V, args=([R_c,n_0_,mu_,V_0]), dx=1e-6)
+
+def max_slope(f, fit_param, V):
+    V_minimum = optimize.fminbound(f, V[0], V[-1], args=(fit_param))
+    return f(V_minimum, *fit_param)
+
+def FWHM(V_data, R_data):
+
+    fit_param = fit(V_data, R_data)
+    maximum = minimize_scalar(lambda x: -R_total(x,0,fit_param[1], fit_param[2], fit_param[3]))
+
+    # Maximum value and corresponding x-value
+    max_y = -maximum.fun  # Since we took negative of the function
+    max_x = maximum.x
+
+    # Find half of the maximum value
+    half_max_y = max_y * 0.5
+
+    # specify locations on the x axis from where roots are gonna be found, this is kinda ugly
+    voltage_intervals = np.linspace(0, 100,5)
+
+    roots=np.array([])
+
+    f = lambda x : R_total(x,0,fit_param[1],fit_param[2],fit_param[3]) - half_max_y
+
+    for i in voltage_intervals:
+        #root = root(f, x0=i)['x'][0]
+        root_i = fsolve(f,i)[0]
+        roots = np.append(roots, round(root_i, 2))
+    half_max_x = np.unique(np.sort(roots))
+
+    if len(half_max_x) == 1:
+        fwhm = 0
+    else:
+        # Calculate the FWHM
+        fwhm = half_max_x[1] - half_max_x[0]
+
+    return fwhm, max_y
+
+def analisys1(V, R_up, R_down):
+
+    fitting_parameters_up = fit(V, R_up)
+    fitting_parameters_down = fit(V, R_down)
+
+    maximal_slope_up = max_slope(derivative_R_total, fitting_parameters_up, V)
+    V_peak_up = fitting_parameters_up[3]
+
+    maximal_slope_down = max_slope(derivative_R_total, fitting_parameters_down, V)
+    V_peak_down = fitting_parameters_down[3]
+
+    delta_peak = V_peak_down - V_peak_up
+
+    return np.array([maximal_slope_up, V_peak_up, maximal_slope_down, V_peak_down, delta_peak])
+
+def extract_datetime(string):
+    # Define the pattern to match the date and time format 'YYYY-MM-DD-HH-MM-SS'
+    datetime_pattern = r'\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}'
+
+    # Extract datetime using regular expression
+    match = re.search(datetime_pattern, string)
+
+    if match:
+        datetime_str = match.group()
+        # Parse the datetime string into a datetime object
+        datetime_obj = datetime.strptime(datetime_str, '%Y-%m-%d-%H-%M-%S')
+        return datetime_obj
+    else:
+        return 'None'
+
+def extract_datetime_env(string):
+    # Define the pattern to match the date and time format 'YYYY-MM-DD-HH-MM-SS'
+    datetime_pattern = r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'
+
+    # Extract datetime using regular expression
+    match = re.search(datetime_pattern, string)
+
+    if match:
+        datetime_str = match.group()
+        # Parse the datetime string into a datetime object
+        datetime_obj = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S')
+        return datetime_obj
+    else:
+        return 'None'
+
+def get_humidity(time, environmental_data):
+    date_strings = environmental_data['Timestamp2'].to_numpy()
+    RH_data = environmental_data['SHT20 Humidity'].to_numpy()
+
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+
+    datetime_array = convert_to_datetime(date_strings)
+
+    # Calculate differences between test date and each date in the array
+    differences = np.abs(datetime_array - time)
+
+    # Find the index of the minimum difference
+    closest_indices = np.where(differences == np.min(differences))[0]
+    closest_index = closest_indices[0]
+
+    RH = RH_data[closest_index]
+
+    return RH
+
+def get_mfc(time, mfc_value):
+
+    date_strings_MFC = MFC1['Timestamp'].to_numpy()
+    MFC_value = MFC1['MFC1 Value'].to_numpy()
+
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+    datetime_array = convert_to_datetime_mfc(date_strings_MFC)
+
+
+    # Calculate differences between test date and each date in the array
+    differences = np.abs(datetime_array - time)
+
+    # Find the index of the minimum difference
+    closest_indices = np.where(differences == np.min(differences))[0]
+    closest_index = closest_indices[0]
+
+    mfc = MFC_value[closest_index]
+
+    return mfc
+
+def get_klep(time, environmental_data):
+    date_strings = environmental_data['Timestamp2'].to_numpy()
+    klep_data = environmental_data['Klep status'].to_numpy()
+
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+
+    datetime_array = convert_to_datetime(date_strings)
+
+    # Calculate differences between test date and each date in the array
+    differences = np.abs(datetime_array - time)
+
+    # Find the index of the minimum difference
+    closest_indices = np.where(differences == np.min(differences))[0]
+    closest_index = closest_indices[0]
+
+    Klep = klep_data[closest_index]
+
+    return Klep
+
+def R_at_XV_fit(list_of_arrays, Volts):
+
+    resistance_at_XV_fit_poly = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        z = np.polyfit(V, R_up, 6)
+        p = np.poly1d(z)
+
+        resistance_at_XV_fit_poly.append(p(Volts))
+
+
+    return resistance_at_XV_fit_poly
+
+def up_min_down_at_XV_fit(list_of_arrays, Volts):
+
+    up_min_down = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        zu = np.polyfit(V, R_up, 6)
+        pu = np.poly1d(zu)
+
+        zd = np.polyfit(V, R_down, 6)
+        pd = np.poly1d(zd)
+
+        up_min_down.append(pu(Volts)-pd(Volts))
+
+
+    return up_min_down
+
+def delta_v(list_of_arrays):
+
+    dv_list = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        dv = analisys1(V, R_up, R_down)[4]
+
+        dv_list.append(dv)
+
+    return dv_list
+
+def fwhm_(list_of_arrays):
+
+    fwhm_u_list = []
+    fwhm_d_list = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        fwhm_u = FWHM(V, R_up)[0]
+        fwhm_d = FWHM(V, R_down)[0]
+
+        fwhm_u_list.append(fwhm_u)
+        fwhm_d_list.append(fwhm_d)
+
+    return fwhm_u_list, fwhm_d_list
+
+def max_R(list_of_arrays):
+
+    max_R_u_list = []
+    max_R_d_list = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        maxr_u = FWHM(V, R_up)[1]
+        maxr_d = FWHM(V, R_down)[1]
+
+        max_R_u_list.append(maxr_u)
+        max_R_d_list.append(maxr_d)
+
+    return max_R_u_list, max_R_d_list
+
+def max_slope_(list_of_arrays):
+
+    ms_list_u = []
+    ms_list_d = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        an = analisys1(V, R_up, R_down)
+        ms_u = an[0]
+        ms_d = an[2]
+
+        ms_list_u.append(ms_u)
+        ms_list_d.append(ms_d)
+
+    return  ms_list_u, ms_list_d
+
+def R0(list_of_arrays):
+
+    ro_list_u = []
+    ro_list_d = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        fitje_u = fit(V, R_up)
+        fitje_d = fit(V, R_down)
+        #print(fitje_u[0])
+
+        ro_list_u.append(fitje_u[0])
+        ro_list_d.append(fitje_d[0])
+
+    return  ro_list_u, ro_list_d
+
+def V0(list_of_arrays):
+
+    V0_list_u = []
+    V0_list_d = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        V0_u = analisys1(V, R_up, R_down)[1]
+        V0_d = fit(V, R_down)[3]
+
+        V0_list_u.append(V0_u)
+        V0_list_d.append(V0_d)
+
+    return  V0_list_u, V0_list_d
+
+def length(list_of_arrays):
+
+    length_list_u = []
+    length_list_d = []
+
+    for data in list_of_arrays:
+        V = data[:,0]
+        R_up = data[:,1]
+        R_down = data[:,2]
+
+        R0_u = fit(V, R_up)[0]
+        R0_d = fit(V, R_down)[0]
+
+        maxr_u = FWHM(V, R_up)[1]
+        maxr_d = FWHM(V, R_down)[1]
+
+
+        length_list_u.append(maxr_u-R0_u)
+        length_list_d.append(maxr_d-R0_d)
+
+    return  length_list_u, length_list_d
+
+def get_data2(year, month, day, start_hour, end_hour, receptor):
+
+
+    start_minute = int((start_hour - int(start_hour))*60)
+    end_minute = int((end_hour - int(end_hour))*60)
+    start_h = int(start_hour)
+    end_h = int(end_hour)
+    second = 0
+
+    start_date_string = "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(year, month, day, start_h, start_minute, second)
+    end_date_string = "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(year, month, day, end_h, end_minute, second)
+
+    data = get_data(start_date_string, end_date_string,10000)
+
+    filtered_data = filter_data(data, receptor)
+
+    return filtered_data
+
+def get_data3(year, month, start_day, end_day, start_hour, end_hour, receptor):
+
+
+    start_minute = int((start_hour - int(start_hour))*60)
+    end_minute = int((end_hour - int(end_hour))*60)
+    start_h = int(start_hour)
+    end_h = int(end_hour)
+    second = 0
+
+    start_date_string = "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(year, month, start_day, start_h, start_minute, second)
+    end_date_string = "{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z".format(year, month, end_day, end_h, end_minute, second)
+
+    data = get_data(start_date_string, end_date_string,10000)
+
+    filtered_data = filter_data(data, receptor)
+
+    return filtered_data
+
+def filter_data(data, receptor):
+
+    receptor_key = 'receptor_uid'
+    receptor_value = receptor
+
+
+    filtered_data = [d for d in data if d.get(receptor_key) == receptor_value]
+
+    return filtered_data
+
+def import_and_match_data_klep(directory, environmental_data):
+    # Get a list of all files in the directory
+    all_files = os.listdir(directory)
+
+    # Filter out only the CSV files
+    csv_files = [file for file in all_files if file.endswith('.csv')]
+
+    # Create an empty list to store NumPy arrays
+    numpy_arrays = []
+    date_times = []
+    klep_data = []
+
+    # Iterate over each CSV file
+    for csv_file in csv_files:
+        # Read the CSV file into a NumPy array
+        file_path = os.path.join(directory, csv_file)
+        #print(extract_datetime(csv_file))
+        time = extract_datetime(csv_file)
+        date_times.append(time)
+        data = np.genfromtxt(file_path, delimiter=',')  # Assuming CSV files are comma-separated
+
+        # Remove the first row and the last column
+        data = data[1:, :-1]
+        numpy_arrays.append(data)
+
+        # get relative humidity from the environmental data
+        klep = get_klep(time, environmental_data)
+        klep_data.append(klep)
+
+    numpy_arrays = np.array(numpy_arrays)
+    date_times = np.array(date_times)
+    klep_data = np.array(klep_data)
+
+    # Get the indices that would sort the datetime array
+    sorted_indices = np.argsort(date_times)
+    # Use the sorted indices to reorder all arrays
+    sorted_datetimes = date_times[sorted_indices]
+    sorted_data_array = numpy_arrays[sorted_indices]
+    sorted_klep_data = klep_data[sorted_indices]
+
+    return sorted_data_array, sorted_datetimes, sorted_klep_data
+
+def import_sweeps_from_csv(directory):
+
+    # Get a list of all files in the directory
+    all_files = os.listdir(directory)
+
+    # Filter out only the CSV files
+    csv_files = [file for file in all_files if file.endswith('.csv')]
+
+    # Create an empty list to store NumPy arrays
+    sweeps_data = []
+    date_times = []
+
+     # Iterate over each CSV file
+    for csv_file in csv_files:
+        # Read the CSV file into a NumPy array
+        file_path = os.path.join(directory, csv_file)
+        #extract time
+        time = extract_datetime(csv_file)
+        date_times.append(time)
+
+        # get sweeps
+        data = np.genfromtxt(file_path, delimiter=',')  # Assuming CSV files are comma-separated
+
+        # Remove the first row and the last column
+        data = data[1:, :-1]
+        sweeps_data.append(data)
+
+
+
+    sweeps_data_ = np.array(sweeps_data)
+    date_times_ = np.array(date_times)
+
+    # Get the indices that would sort the datetime array
+    sorted_indices = np.argsort(date_times_)
+    # Use the sorted indices to reorder all arrays
+    sorted_datetimes = date_times_[sorted_indices]
+    sorted_data_array = sweeps_data_[sorted_indices]
+
+    return sorted_datetimes, sorted_data_array
+
+
+
+def extract_klep(env_data):
+
+
+    date_times = []
+    klep_data = []
+
+    for timestamp in env_data['Timestamp2']:
+        date_times.append(extract_datetime_env(timestamp))
+    for klep in env_data['Klep status']:
+        klep_data.append(klep)
+
+    return date_times, klep_data
+
+
+def extract_heater(env_data):
+
+
+    date_times = []
+    heater_data = []
+
+    for timestamp in env_data['Timestamp1']:
+        date_times.append(extract_datetime_env(timestamp))
+    for klep in env_data['Heater4']:
+        heater_data.append(klep)
+
+    return date_times, heater_data
+
+def extract_temp(env_data):
+
+
+    date_times = []
+    temp_data = []
+
+    for timestamp in env_data['Timestamp2']:
+        date_times.append(extract_datetime_env(timestamp))
+    for klep in env_data['SHT20 Temperature']:
+        temp_data.append(klep)
+
+    return date_times, temp_data
+
+def R_at_XV(list_of_sweeps, V):
+
+    R_up_values = []
+    R_down_values = []
+    R_up_min_down_values = []
+
+    for sweep in list_of_sweeps:
+        absolute_diff = np.abs(sweep[:,0] - V)
+        closest_index = np.argmin(absolute_diff)
+
+        R_up = sweep[closest_index,1]
+        R_down = sweep[closest_index,2]
+        R_up_min_down =  R_up - R_down
+
+        R_up_values.append(R_up)
+        R_down_values.append(R_down)
+        R_up_min_down_values.append(R_up_min_down)
+
+    return np.array(R_up_values), np.array(R_down_values), np.array(R_up_min_down_values)
+
+def R_at_XV_fit_poly(list_of_sweeps, Volt, order):
+
+    fit_order = order
+
+    R_up_values = []
+    R_down_values = []
+    R_up_min_down_values = []
+
+    for sweep in list_of_sweeps:
+        V = sweep[:,0]
+        R_up = sweep[:,1]
+        R_down = sweep[:,2]
+
+        zu = np.polyfit(V, R_up, fit_order)
+        pu = np.poly1d(zu)
+
+        zdd = np.polyfit(V, R_down, fit_order)
+        pdd = np.poly1d(zd)
+
+        R_up_values.append(pu(Volt))
+        R_down_values.append(pdd(Volt))
+        R_up_min_down_values.append(pu(Volt)-pdd(Volt))
+
+    return R_up_values, R_down_values, R_up_min_down_values
+
+def R_at_XV_fit_dirac(list_of_sweeps, Volt):
+
+
+    R_up_values = []
+    R_down_values = []
+    R_up_min_down_values = []
+
+    for sweep in list_of_sweeps:
+        V = sweep[:,0]
+        R_up = sweep[:,1]
+        R_down = sweep[:,2]
+
+        fit_param_up = fit(V, R_up)
+        fit_param_down = fit(V, R_down)
+        R_up = R_total(Volt, fit_param_up[0], fit_param_up[1], fit_param_up[2], fit_param_up[3])
+        R_down = R_total(Volt, fit_param_up[0], fit_param_down[1], fit_param_down[2], fit_param_down[3])
+
+
+        R_up_values.append(R_up)
+        R_down_values.append(R_down)
+        R_up_min_down_values.append(R_up-R_down)
+
+    return R_up_values, R_down_values, R_up_min_down_values
+
+def R_at_XV_fit_dirac_R0(list_of_sweeps, Volt):
+
+
+    R_up_values = []
+    R_down_values = []
+    R_up_min_down_values = []
+
+    for sweep in list_of_sweeps:
+        V = sweep[:,0]
+        R_up = sweep[:,1]
+        R_down = sweep[:,2]
+
+        fit_param_up = fit(V, R_up)
+        fit_param_down = fit(V, R_down)
+        R_up = R_total(Volt, 0, fit_param_up[1], fit_param_up[2], fit_param_up[3])
+        R_down = R_total(Volt, 0, fit_param_down[1], fit_param_down[2], fit_param_down[3])
+
+
+        R_up_values.append(R_up)
+        R_down_values.append(R_down)
+        R_up_min_down_values.append(R_up-R_down)
+
+    return R_up_values, R_down_values, R_up_min_down_values
+
+def datetime_array_to_epoch(dt_array):
+    epoch = datetime.utcfromtimestamp(0)
+    delta_array = dt_array - epoch
+    return delta_array.astype('timedelta64[s]').astype(int)
+
+def plot_slope_DV(sweep_directory, env_data_directory):
+
+    # Import data
+    date_times, sweeps = import_sweeps_from_csv(sweep_directory)
+    environmental_data = pd.read_csv(env_data_directory)
+
+    # Analise data
+    DV = delta_v(sweeps)
+
+    epoch_times = datetime_array_to_epoch(date_times)
+
+    epoch_times = epoch_times - epoch_times[0]
+
+    DV_fit_param = np.polyfit(epoch_times, DV, 1)
+    DV_fit = np.poly1d(DV_fit_param)
+
+
+    return DV_fit_param
+
+
+def plak(dir_list, env_list):
+
+    datetimes_total, sweeps_total = import_sweeps_from_csv(dir_list[0])
+    env_total = pd.read_csv(env_list[0])
+
+    for i in range(len(env_list)-1):
+        datetimes, sweeps = import_sweeps_from_csv(dir_list[i+1])
+        sweeps_total = np.concatenate((sweeps_total, sweeps),axis=0)
+        datetimes_total = np.concatenate((datetimes_total, datetimes))
+
+    for i in range(len(env_list)-1):
+        env_data = pd.read_csv(env_list[i+1])
+        env_total = pd.concat([env_total, env_data])
+
+
+    return datetimes_total, sweeps_total, env_total
+
+def plak_env(env_list):
+
+    env_total = pd.read_csv(env_list[0])
+
+    for i in range(len(env_list)-1):
+        env_data = pd.read_csv(env_list[i+1])
+        env_total = pd.concat([env_total, env_data])
+
+    return env_total
+
+def plot_all2(dir_list, env_list, data_cut):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    sweeps = sweeps[:-data_cut]
+    date_times = date_times[:-data_cut]
+
+    # Analise data
+    DV = delta_v(sweeps)
+
+    V0_up, V0_down = V0(sweeps)
+
+    fwhm_u, fwhm_d = fwhm_(sweeps)
+
+    maxr_u, maxr_d = max_R(sweeps)
+
+    ms_u, ms_d = max_slope_(sweeps)
+
+
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+    R_at_20V_u, R_at_20V_d, Delta20  = R_at_XV(sweeps, 20)
+    R_at_40V_u, R_at_40V_d, Delta40  = R_at_XV(sweeps, 40)
+
+    t_klep, klep = extract_klep(environmental_data)
+
+    # create figure
+    fig = plt.figure(figsize=(15, 6*8))
+
+    ax1 = fig.add_subplot(8, 1, 1)
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+
+    ax3 = fig.add_subplot(8, 1, 2)
+    ax4 = ax3.twinx()  # Create a twin y-axis for the second subplot
+
+    ax5 = fig.add_subplot(8, 1, 3)
+    ax6 = ax5.twinx()  # Create a twin y-axis for the third subplot
+
+    ax7 = fig.add_subplot(8, 1, 4)
+    ax8 = ax7.twinx()  # Create a twin y-axis for the fourth subplot
+
+    ax9 = fig.add_subplot(8, 1, 5)
+    ax10 = ax9.twinx()  # Create a twin y-axis for the fifth subplot
+
+    ax11 = fig.add_subplot(8, 1, 6)
+    ax12 = ax11.twinx()  # Create a twin y-axis for the sixth subplot
+
+    ax13 = fig.add_subplot(8, 1, 7)
+    ax14 = ax13.twinx()  # Create a twin y-axis for the seventh subplot
+
+    ax15 = fig.add_subplot(8, 1, 8)
+    ax16 = ax15.twinx()  # Create a twin y-axis for the eighth subplot
+
+    # R at 0V
+    ax1.plot_date(date_times, R_at_0V_u, linestyle='-', marker=None, label='R up at 0V')
+    ax1.plot_date(date_times, R_at_0V_d, linestyle='-', marker=None, label='R down at 0V')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax1.set_ylabel('R')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title('R at 0V')
+
+    # R at 20V
+    ax3.plot_date(date_times, R_at_20V_u, linestyle='-', marker=None, label='R up at 20V')
+    ax3.plot_date(date_times, R_at_20V_d, linestyle='-', marker=None, label='R down at 20V')
+    ax4.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax3.set_ylabel('R')
+    ax4.set_ylabel('Klep status')
+    ax3.set_title('R at 20V')
+
+    # R at 40V
+    ax5.plot_date(date_times, R_at_40V_u, linestyle='-', marker=None, label='R up at 40V')
+    ax5.plot_date(date_times, R_at_40V_d, linestyle='-', marker=None, label='R down at 40V')
+    ax6.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep2')
+    ax5.set_ylabel('R')
+    ax6.set_ylabel('Klep status')
+    ax5.set_title('R at 40V')
+
+    # V0
+    ax7.plot_date(date_times, V0_up, linestyle='-', marker=None, label='V0 (Dirac point up)')
+    ax7.plot_date(date_times, V0_down, linestyle='-', marker=None, label='V0 (Dirac point down)')
+    ax8.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax7.set_ylabel('V0')
+    ax8.set_ylabel('Klep status')
+    ax7.set_title('Dirac point')
+
+    # Delta V0
+    ax9.plot_date(date_times, DV, linestyle='-', marker=None, label='V0 (Dirac point up)')
+    ax10.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax9.set_ylabel('$\Delta$V')
+    ax10.set_ylabel('Klep status')
+    ax9.set_title('$\Delta$V')
+
+    # FWHM
+    ax11.plot_date(date_times, V0_up, linestyle='-', marker=None, label='V0 (Dirac point up)')
+    ax11.plot_date(date_times, V0_down, linestyle='-', marker=None, label='V0 (Dirac point down)')
+    ax12.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax11.set_ylabel('V')
+    ax12.set_ylabel('Klep status')
+    ax11.set_title('Full width half maximum')
+
+    # Max R
+    ax13.plot_date(date_times, maxr_u, linestyle='-', marker=None, label='max R up')
+    ax13.plot_date(date_times, maxr_d, linestyle='-', marker=None, label='V0 (max R down)')
+    ax14.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax13.set_ylabel('R')
+    ax14.set_ylabel('Klep status')
+    ax13.set_title('Max R')
+
+    # Max slope
+    ax15.plot_date(date_times, ms_u, linestyle='-', marker=None, label='max slope up')
+    ax15.plot_date(date_times, ms_d, linestyle='-', marker=None, label='V0 (max slope down)')
+    ax16.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep')
+    ax15.set_ylabel('DR/DV')
+    ax15.set_title('Maximal slope')
+    ax16.set_ylabel('Klep status')
+
+    for ax in [ax1, ax3, ax5, ax7, ax9, ax11, ax13, ax15]:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+        ax.tick_params(axis='x', rotation=45)
+
+
+
+    # Adjust layout and show plot
+    plt.tight_layout()
+    #plt.show()
+
+    return
+
+
+def baseline_fit_filter(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    # convert datetimes to epoch times
+    epoch_times = datetime_array_to_epoch(date_times)
+    epoch_times = epoch_times - epoch_times[0]
+
+    # Analise data
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+
+    # copy data
+    data_baseline = R_at_0V_u.copy()
+    t_baseline = epoch_times.copy()
+
+    # make initial fit
+    opt_inv, cov_inv = curve_fit(inv, epoch_times, R_at_0V_u)
+    baseline_1 = inv(epoch_times, *opt_inv)
+    baseline_correction_1 = R_at_0V_u - baseline_1
+
+
+    # detect peaks of all prominences to extract largest prominences
+    peaks_prom, properties_prom = find_peaks(baseline_correction_1, prominence=0)
+
+    # Determine suitable prominence
+    prominences = properties_prom['prominences']
+    nth_largest_prom = nth_largest(prominences, 8)
+    prominence = np.max(nth_largest_prom)
+
+    # calculate location of peaks
+    peaks, properties = find_peaks(baseline_correction_1, prominence=prominence)
+
+
+    # determine peak widths
+    width = peak_widths(baseline_correction_1, peaks, rel_height=0.8)
+
+    # Locate indices closest to peak width and delete peak data
+    for i in range(len(peaks)):
+        peak_index = peaks[i]
+        left_index = int(width[2][i])
+        right_index = int(width[3][i])
+        # delete peaks
+        data_baseline[left_index:right_index] = np.nan
+
+
+    # Create a mask to identify NaN values
+    mask = np.isnan(data_baseline)
+
+    # Filter the array to remove entries with NaN values
+    t_baseline = t_baseline[~mask]
+    data_baseline = data_baseline[~mask]
+
+    # make fit through peak removed data
+    opt, cov = curve_fit(inv, t_baseline, data_baseline)
+    baseline_2 = inv(epoch_times, *opt)
+    bl_correction = R_at_0V_u - baseline_2
+
+
+    plt.plot(epoch_times, R_at_0V_u)
+    plt.plot(epoch_times, R_at_0V_u)
+    plt.figure(figsize=(10, 8))
+
+    plt.subplot(2, 1, 1)  # 2 rows, 1 column, subplot 1
+    plt.plot(epoch_times[peaks], baseline_correction_1[peaks], 'ro', label='Peaks')
+    plt.plot(epoch_times,baseline_correction_1)
+    for i in range(len(peaks)):
+        peak_index = peaks[i]
+        plt.axvline(x=t[int(width[2][i])], color='r', linestyle='--')
+        plt.axvline(x=t[int(width[3][i])], color='r', linestyle='--')
+    plt.title('peaks')
+    plt.xlabel('t (s)')
+    plt.ylabel('R')
+
+    plt.subplot(2, 1, 2)  # 2 rows, 1 column, subplot 2
+    plt.plot(epoch_times, bl_correction)
+    #plt.plot(epoch_times, baseline(t_baseline), color='red')
+    plt.title('Baseline estimation')
+    plt.xlabel('t (s)')
+    plt.ylabel('V')
+
+    plt.tight_layout()
+
+    return
+
+def baseline_fit_filter_2(dir_list, env_list, data_cut):
+
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    sweeps = sweeps[:-data_cut]
+    date_times = date_times[:-data_cut]
+
+    # get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # convert datetimes to epoch times
+    epoch_times = datetime_array_to_epoch(date_times)
+    epoch_times = epoch_times - epoch_times[0]
+
+    epoch_times_klep = np.array([dt.timestamp() for dt in t_klep])
+    epoch_times_klep = epoch_times_klep - epoch_times_klep[0]
+
+    # Analise data
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+
+    # copy data
+    data_baseline = R_at_0V_u.copy()
+    t_baseline = epoch_times.copy()
+
+    # make initial fit
+    opt_inv, cov_inv = curve_fit(inv, epoch_times, R_at_0V_u, p0=[1.495e+06, 7.208e+02, -8.2443e+04])
+    print('parameters:', opt_inv)
+    baseline_1 = inv(epoch_times, *opt_inv)
+
+
+    #filter out all values greater than initial fit
+    for i in range(len(epoch_times)):
+        if R_at_0V_u[i] > baseline_1[i]:
+            data_baseline[i] = np.nan
+
+    # Create a mask to identify NaN values
+    mask = np.isnan(data_baseline)
+
+    # Filter the array to remove entries with NaN values
+    t_baseline = t_baseline[~mask]
+    data_baseline = data_baseline[~mask]
+
+    # Fit a second time
+    opt, cov = curve_fit(inv, t_baseline, data_baseline, p0=opt_inv)
+    baseline_2 = inv(epoch_times, *opt)
+    bl_correction = R_at_0V_u - baseline_2
+
+
+    fig = plt.figure(figsize=(10, 8))
+
+    ax1 = fig.add_subplot(2, 1, 1)
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+
+    ax3 = fig.add_subplot(2, 1, 2)
+    ax4 = ax3.twinx()  # Create a twin y-axis for the second subplot
+
+
+    ax1.plot(epoch_times, R_at_0V_u)
+    ax1.plot(epoch_times,baseline_2)
+    ax2.plot(epoch_times_klep, klep, linestyle='-', marker=None, color='red', label='klep', linewidth=0.5)
+    #ax1.title('baseline correction')
+    ax1.set_xlabel('t (s)')
+    ax1.set_ylabel('R')
+    ax1.set_title('R at 0V')
+
+
+    ax3.plot(epoch_times, bl_correction)
+    ax4.plot(epoch_times_klep, klep, linestyle='-', marker=None, color='red', label='klep', linewidth=0.5)
+    #plt.plot(epoch_times, baseline(t_baseline), color='red')
+    #ax3.title('baseline correction')
+    ax3.set_xlabel('t (s)')
+    ax3.set_ylabel('R')
+    ax4.set_ylabel('klep status')
+    ax3.set_title('baseline corrected R at 0V')
+
+    plt.tight_layout()
+
+    return
+
+def baseline_fit_filter_2_poly(dir_list, env_list, data_cut):
+
+    order = 5
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    sweeps = sweeps[:-data_cut]
+    date_times = date_times[:-data_cut]
+
+    # get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # convert datetimes to epoch times
+    epoch_times = datetime_array_to_epoch(date_times)
+    epoch_times = epoch_times - epoch_times[0]
+
+    epoch_times_klep = np.array([dt.timestamp() for dt in t_klep])
+    epoch_times_klep = epoch_times_klep - epoch_times_klep[0]
+
+    # Analise data
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+
+    # copy data
+    data_baseline = R_at_0V_u.copy()
+    t_baseline = epoch_times.copy()
+
+    # make initial fit
+    params = np.polyfit(epoch_times, R_at_0V_u, order)
+    initial_fit = np.poly1d(params)
+
+    baseline_1 = initial_fit(epoch_times,)
+
+
+    #filter out all values greater than initial fit
+    for i in range(len(epoch_times)):
+        if R_at_0V_u[i] > baseline_1[i]:
+            data_baseline[i] = np.nan
+
+    # Create a mask to identify NaN values
+    mask = np.isnan(data_baseline)
+
+    # Filter the array to remove entries with NaN values
+    t_baseline = t_baseline[~mask]
+    data_baseline = data_baseline[~mask]
+
+    # Fit a second time
+    params = np.polyfit(t_baseline, data_baseline, order)
+    final_fit = np.poly1d(params)
+
+    baseline_2 = final_fit(epoch_times)
+    bl_correction = R_at_0V_u - baseline_2
+
+
+    fig = plt.figure(figsize=(10, 8))
+
+    ax1 = fig.add_subplot(2, 1, 1)
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+
+    ax3 = fig.add_subplot(2, 1, 2)
+    ax4 = ax3.twinx()  # Create a twin y-axis for the second subplot
+
+
+    ax1.plot(epoch_times, R_at_0V_u)
+    ax1.plot(epoch_times,baseline_2)
+    ax2.plot(epoch_times_klep, klep, linestyle='-', marker=None, color='red', label='klep', linewidth=0.5)
+    #ax1.title('baseline correction')
+    ax1.set_xlabel('t (s)')
+    ax1.set_ylabel('R')
+    ax1.set_title('R at 0V')
+
+
+    ax3.plot(epoch_times, bl_correction)
+    ax4.plot(epoch_times_klep, klep, linestyle='-', marker=None, color='red', label='klep', linewidth=0.5)
+    #plt.plot(epoch_times, baseline(t_baseline), color='red')
+    #ax3.title('baseline correction')
+    ax3.set_xlabel('t (s)')
+    ax3.set_ylabel('R')
+    ax4.set_ylabel('klep status')
+    ax3.set_title('baseline corrected R at 0V')
+
+    plt.tight_layout()
+
+    return
+
+
+def compare(dir_list1, dir_list2, env_list, data_cut):
+
+    # Import data
+    date_times1, sweeps1, environmental_data = plak(dir_list1, env_list)
+    date_times2, sweeps2, environmental_data = plak(dir_list2, env_list)
+
+    sweeps1 = sweeps1[:-data_cut]
+    date_times1 = date_times1[:-data_cut]
+    sweeps2 = sweeps2[:-data_cut]
+    date_times2 = date_times2[:-data_cut]
+
+    # get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # convert datetimes to epoch times
+    epoch_times1 = datetime_array_to_epoch(date_times1)
+    epoch_times1 = epoch_times1 - epoch_times1[0]
+    epoch_times2 = datetime_array_to_epoch(date_times2)
+    epoch_times2 = epoch_times2 - epoch_times2[0]
+
+    epoch_times_klep = np.array([dt.timestamp() for dt in t_klep])
+    epoch_times_klep = epoch_times_klep - epoch_times_klep[0]
+
+    # Analise data
+    R_at_0V_u1, R_at_0V_d1, Delta01  = R_at_XV(sweeps1, 0)
+    R_at_0V_u2, R_at_0V_d2, Delta02  = R_at_XV(sweeps2, 0)
+
+    #look at difference between data 1 and 2
+    R_at_0V_u1_interpolated = interp1d(epoch_times1, R_at_0V_u1, kind='linear')
+    R_at_0V_u2_interpolated = interp1d(epoch_times2, R_at_0V_u2, kind='linear')
+    Delta = R_at_0V_u1_interpolated(epoch_times1)-R_at_0V_u2_interpolated(epoch_times1)
+
+    # shift data to match other data
+    difference = R_at_0V_u1[0] - R_at_0V_u2[0]
+    R_at_0V_u2 = R_at_0V_u2 + difference
+
+    # determine overlaping time range
+    max_start_t = max(epoch_times1[0], epoch_times2[0])
+    min_end_t = min(epoch_times1[-1], epoch_times2[-1])
+    time = np.linspace(max_start_t, min_end_t, len(epoch_times1))
+
+    #substract baseline
+    data1_interpolated = interp1d(epoch_times1, R_at_0V_u1, kind='linear')
+    data2_interpolated = interp1d(epoch_times2, R_at_0V_u2, kind='linear')
+    baseline_corrected_data = data1_interpolated(time) - data2_interpolated(time)
+
+
+    return time, R_at_0V_u1, R_at_0V_u2, baseline_corrected_data, klep, epoch_times_klep, Delta
+
+def compare_with_heater(dir_list1, env_list, data_cut):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list1, env_list)
+
+
+    sweeps = sweeps[:-data_cut]
+    date_times = date_times[:-data_cut]
+
+    # get heater data
+    t_heater, heater = extract_heater(environmental_data)
+
+    # convert datetimes to epoch times
+    epoch_times = datetime_array_to_epoch(date_times)
+
+    epoch_times_heater = np.array([dt.timestamp() for dt in t_heater])
+
+
+    # Analise data
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+
+    fig = plt.figure(figsize=(10, 8))
+
+    ax1 = fig.add_subplot(2, 1, 1)
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+
+    ax1.plot(epoch_times, R_at_0V_u)
+    ax2.plot(epoch_times_heater, heater, linestyle='-', marker=None, color='red', label='heater', linewidth=0.5)
+    ax2.set_ylim(10, 50)
+    ax1.set_xlabel('t (s)')
+    ax1.set_ylabel('R')
+    ax1.set_title('R at 0V vs heater')
+
+    return epoch_times_heater, heater
+
+def get_receptor(data, receptor):
+
+    receptor_key = 'receptor_uid'
+    receptor_value = receptor
+
+    filtered_data = [d for d in data if d.get(receptor_key) == receptor_value]
+
+    return filtered_data
+
+def get_element(data, element):
+
+    element_key = 'receptor_element_index'
+    element_value = element
+
+    filtered_data = [d for d in data if d.get(element_key) == element_value]
+
+    return filtered_data
+
+def plot_BME_VOC(env_data_list):
+
+    env_data = plak_env(env_data_list)
+
+    tVOC_BME = env_data['BME tVOC'].values
+    tVOC_BME_time = env_data['Timestamp3'].values
+
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+    datetime_array = convert_to_datetime(tVOC_BME_time)
+
+    # Make plot
+    plt.figure(figsize=(8, 6))
+    plt.plot_date(datetime_array, tVOC_BME, fmt='-', label='BME tVOC', linewidth=0.5)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    #plt.gca().xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    plt.tick_params(axis='x', rotation=45)
+    plt.xlabel('time (H:M)')
+    plt.ylabel('tVOC')
+    plt.title('tVOC (BME)')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_temperature(env_data_list):
+
+    env_data = plak_env(env_data_list)
+
+    temp_BME = env_data['BME Temp'].values
+    temp_BME_time = env_data['Timestamp3'].values
+
+    temp_SHT20 = env_data['SHT20 Temperature'].values
+    temp_SHT20_time = env_data['Timestamp2'].values
+
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+    datetime_array_BME = convert_to_datetime(temp_BME_time)
+
+    #convert_to_datetime_SHT20 = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+    datetime_array_SHT20 = convert_to_datetime(temp_SHT20_time)
+
+    # Make plot
+    plt.figure(figsize=(8, 6))
+    plt.plot_date(datetime_array_BME, temp_BME, fmt='-', label='BME', linewidth=0.5)
+    plt.plot_date(datetime_array_SHT20, temp_SHT20, fmt='-', label='SHT20', linewidth=0.5)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    #plt.gca().xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    plt.tick_params(axis='x', rotation=45)
+    plt.xlabel('time (H:M)')
+    plt.ylabel('temperature (Celsius)')
+    plt.legend()
+    #plt.ylim(20,100)
+    plt.title('temperature (BME and SHT20)')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_humidity(env_data_list):
+
+    # get data
+    env_data = plak_env(env_data_list)
+
+    # convert to individual numpy arrays
+    hum_BME = env_data['BME Humidity'].values
+    hum_BME_time = env_data['Timestamp3'].values
+
+    hum_SHT20 = env_data['SHT20 Humidity'].values
+    hum_SHT20_time = env_data['Timestamp2'].values
+
+    # convert timestrings to datetimes
+    convert_to_datetime = np.vectorize(lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S'))
+
+    datetime_array_BME = convert_to_datetime(hum_BME_time)
+    datetime_array_SHT20 = convert_to_datetime(hum_SHT20_time)
+
+    # Make plot
+    plt.figure(figsize=(8, 6))
+    plt.plot_date(datetime_array_BME, hum_BME, fmt='-', label='BME', linewidth=0.5)
+    plt.plot_date(datetime_array_SHT20, hum_SHT20, fmt='-', label='SHT20', linewidth=0.5)
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    #plt.gca().xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    plt.tick_params(axis='x', rotation=45)
+    plt.xlabel('time (H:M)')
+    plt.ylabel('Relative Humidity (%)')
+    plt.legend()
+    #plt.ylim(20,100)
+    plt.title('Humidity readings (BME and SHT20)')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_R_at_0V(sweeps_list, env_data_list):
+
+    # get data
+    # Import data
+    date_times, sweeps, environmental_data = plak(sweeps_list, env_data_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Calculate resistance at 0V
+    R_at_0V_u, R_at_0V_d, Delta0  = R_at_XV(sweeps, 0)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, R_at_0V_u, linestyle='-', marker=None, label='R up')
+    ax1.plot_date(date_times, R_at_0V_d, linestyle='-', marker=None, label='R down')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'R ($\Omega$)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title('R at 0V')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_R_at_20V(sweeps_list, env_data_list):
+
+    # get data
+    # Import data
+    date_times, sweeps, environmental_data = plak(sweeps_list, env_data_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Calculate resistance at 0V
+    R_at_20V_u, R_at_20V_d, Delta20  = R_at_XV(sweeps, 20)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, R_at_20V_u, linestyle='-', marker=None, label='R up')
+    ax1.plot_date(date_times, R_at_20V_d, linestyle='-', marker=None, label='R down')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'R ($\Omega$)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title('R at 20V')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_R_at_40V(sweeps_list, env_data_list):
+
+    # get data
+    # Import data
+    date_times, sweeps, environmental_data = plak(sweeps_list, env_data_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Calculate resistance at 0V
+    R_at_40V_u, R_at_40V_d, Delta40  = R_at_XV(sweeps, 40)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, R_at_40V_u, linestyle='-', marker=None, label='R up')
+    ax1.plot_date(date_times, R_at_40V_d, linestyle='-', marker=None, label='R down')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'R ($\Omega$)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title('R at 40V')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_hysteresis(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Analise data
+    DV = delta_v(sweeps)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, DV, linestyle='-', marker=None, label='Hysteresis')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'Hysteresis (V)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title(r'Hysteresis ($CNP_{up}-CNP_{down}$)')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_CNP(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Analise data
+    V0_up, V0_down = V0(sweeps)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, V0_up, linestyle='-', marker=None, label='CNP up')
+    ax1.plot_date(date_times, V0_down, linestyle='-', marker=None, label='CNP down')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'CNP (V)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title(r'$CNP_{up}$ and $CNP_{down}$')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def plot_max_R(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    #sweeps = sweeps[:-data_cut]
+    #date_times = date_times[:-data_cut]
+
+    # Analise data
+    maxr_u, maxr_d = max_R(sweeps)
+
+    # Get klep data
+    t_klep, klep = extract_klep(environmental_data)
+
+    # Make plot
+    fig, ax1 = plt.subplots(figsize=(16, 6))
+    ax2 = ax1.twinx()  # Create a twin y-axis for the first subplot
+    ax1.plot_date(date_times, maxr_u, linestyle='-', marker=None, label='max R up')
+    ax1.plot_date(date_times, maxr_d, linestyle='-', marker=None, label='max R down')
+    ax2.plot_date(t_klep, klep, linestyle='-', marker=None, color='red', label='klep',linewidth=0.3)
+    ax1.set_ylabel(r'max R ($\Omega$)')
+    ax1.set_xlabel('time (H:M)')
+    ax2.set_ylabel('Klep status')
+    ax1.set_title(r'Max R')
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=3))
+    ax1.tick_params(axis='x', rotation=45)
+
+    # Add legend
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper right')
+
+    # Save the plot to a BytesIO object
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300)
+    buffer.seek(0)
+    plt.close()
+
+    return buffer
+
+def make_datestring(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    # Find the earliest and latest dates
+    earliest_date = min(date_times).date()
+    latest_date = max(date_times).date()
+
+    # Format the dates into strings
+    earliest_date_str = earliest_date.strftime("%d-%m-%Y")
+    latest_date_str = latest_date.strftime("%d-%m-%Y")
+
+    # Construct the output string based on different cases
+    if earliest_date != latest_date:
+        output_string = f"{earliest_date_str} / {latest_date_str}"
+    else:
+        output_string = earliest_date_str
+
+    return output_string
+
+def extract_chip_ID_from_directory(directory):
+    # Get list of files in the directory
+    files = os.listdir(directory)
+
+    # Find the first CSV file
+    csv_file = None
+    for file in files:
+        if file.endswith('.csv'):
+            csv_file = file
+            break
+
+    if csv_file:
+        # Extract strings from the CSV file name
+        csv_name_parts = os.path.splitext(csv_file)[0].split('_')
+        if len(csv_name_parts) >= 3:
+            first_string = csv_name_parts[0]
+            second_string = csv_name_parts[1]
+            third_string = csv_name_parts[2]
+            return first_string + ' ' + second_string + ' ' + third_string
+        else:
+            return None, None, None  # Not enough underscores in the filename
+    else:
+        return None, None, None  # No CSV file found in the directory
+
+def extract_drift_per_day(dir_list, env_list):
+
+    # Import data
+    date_times, sweeps, environmental_data = plak(dir_list, env_list)
+
+    R0_firs_and_last_time_of_same_day = []
+
+    day = date_times[0].date()
+    count = 0
+    for i in range(len(date_times)):
+        if date_times[i].date() == day:
+            firs_and_last_time_of_same_day.append(sweeps[i][0])
+        else:
+            firs_and_last_time_of_same_day.append(sweeps[i-1][0])
+            day = date_times[i].date()
+            count = i
+
+    if date_times[-1] not in firs_and_last_time_of_same_day:
+        firs_and_last_time_of_same_day.append(sweeps[-1][0])
+
+    drift = []
+
+    for i in range(len(R0_firs_and_last_time_of_same_day)):
+        drift.append(R0_firs_and_last_time_of_same_day[i] - R0_firs_and_last_time_of_same_day[2*i])
+
+
+
+
+    return days
+
+def add_image_to_canvas(c, image_buffer, x_position, y_position, desired_width):
+    # Convert BytesIO buffer to PIL Image
+    image = PILImage.open(image_buffer)
+
+    # Get the size of the image
+    image_width, image_height = image.size
+
+    # Calculate the aspect ratio of the image
+    aspect_ratio = image_width / image_height
+
+    # Calculate desired height for the image based on the aspect ratio and desired width
+    desired_height = desired_width / aspect_ratio
+
+    # Draw the image onto the canvas
+    c.drawInlineImage(image, x_position, y_position, width=desired_width, height=desired_height)
+
+def create_report(sweep_dir_list, env_dir_list, file_path):
+
+    # Create PDF document
+    #file_path = "/Users/timreisinger/Downloads/graph.pdf"
+
+    # Create canvas
+    c = canvas.Canvas(file_path, pagesize=letter)
+
+    # Get chip ID
+    Chip_ID = extract_chip_ID_from_directory(sweep_dir_list[0])
+
+    # Add title to the first page
+    title_text = 'Chip ' + Chip_ID + ' report'
+    c.setFont("Helvetica-Bold", 16)
+    title_width = c.stringWidth(title_text)
+    c.drawString((letter[0] - title_width) / 2, 750, title_text)
+
+    # Add subtitle to the first page
+    subtitle_text = "Date: " + make_datestring(sweep_dir_list, env_dir_list)
+    c.setFont("Helvetica", 12)
+    subtitle_width = c.stringWidth(subtitle_text)
+    c.drawString((letter[0] - subtitle_width) / 2, 730, subtitle_text)
+
+    # Add description environmental data
+    description_text = "Invironmental data"
+    c.setFont("Helvetica-Bold", 12)
+    description_width = c.stringWidth(description_text)
+    c.drawString(60, 630, description_text)
+
+    # Create graph buffer for temperature graph
+    graph_buffer_temp = plot_temperature(env_dir_list)
+
+    # Create graph buffer for humidity graph
+    graph_buffer_hum = plot_humidity(env_dir_list)
+
+    # Create graph buffer for tVOC graph
+    graph_buffer_voc = plot_BME_VOC(env_dir_list)
+
+    # define graph width
+    width = 280
+
+    # Define the position of the temperature graph on the first page
+    x_position_temp = 40
+    y_position_temp = 400
+
+    # Define the position of the humidity graph on the first page
+    x_position_hum = 300
+    y_position_hum = 400
+
+    # Define the position of the tVOC graph on the first page
+    x_position_voc = 40
+    y_position_voc = 150
+
+    # Add temperature graph to the canvas
+    add_image_to_canvas(c, graph_buffer_temp, x_position_temp, y_position_temp, width)
+
+    # Add humidity graph to the canvas
+    add_image_to_canvas(c, graph_buffer_hum, x_position_hum, y_position_hum, width)
+
+    # Add humidity graph to the canvas
+    add_image_to_canvas(c, graph_buffer_voc, x_position_voc, y_position_voc, width)
+
+    # Add table to the first page
+    data = [['Name', 'Age'],
+            ['John', '30'],
+            ['Alice', '25'],
+            ['Bob', '35']]
+
+    table = Table(data)
+    table.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                               ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                               ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                               ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                               ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                               ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                               ('GRID', (0, 0), (-1, -1), 1, colors.black)]))
+
+    table.wrapOn(c, 400, 200)
+    table.drawOn(c, 400, 150)
+
+    # Add a page break for the second page
+    c.showPage()
+
+    # Add title to the second page
+    title_text_2 = "Resistances at various voltages"
+    c.setFont("Helvetica-Bold", 16)
+    title_width_2 = c.stringWidth(title_text_2)
+    c.drawString((letter[0] - title_width_2) / 2, 750, title_text_2)
+
+    # Create graph buffers
+    graph_buffer_0V = plot_R_at_0V(sweep_dir_list, env_dir_list)
+    graph_buffer_20V = plot_R_at_20V(sweep_dir_list, env_dir_list)
+    graph_buffer_40V = plot_R_at_40V(sweep_dir_list, env_dir_list)
+
+    # Define the position of the second graph on the second page
+    x_position_0V = 5
+    y_position_0V = 500
+
+    x_position_20V = 5
+    y_position_20V = 300
+
+    x_position_40V = 5
+    y_position_40V = 100
+
+    width2 = 600
+
+    # Add graphs to the canvas
+    add_image_to_canvas(c, graph_buffer_0V, x_position_0V, y_position_0V, width2)
+    add_image_to_canvas(c, graph_buffer_20V, x_position_20V, y_position_20V, width2)
+    add_image_to_canvas(c, graph_buffer_40V, x_position_40V, y_position_40V, width2)
+
+    # Add a page break for the third page
+    c.showPage()
+
+    # Add title to the third page
+    title_text_3 = "Hysteresis and max R"
+    c.setFont("Helvetica-Bold", 16)
+    title_width_3 = c.stringWidth(title_text_3)
+    c.drawString((letter[0] - title_width_3) / 2, 750, title_text_3)
+
+    # Create graph buffers
+    graph_buffer_hysteresis = plot_hysteresis(sweep_dir_list, env_dir_list)
+    graph_buffer_CNP = plot_CNP(sweep_dir_list, env_dir_list)
+    graph_buffer_max_R = plot_max_R(sweep_dir_list, env_dir_list)
+
+    # Define the position of the second graph on the second page
+    x_position_hys = 5
+    y_position_hys = 500
+
+    x_position_CNP = 5
+    y_position_CNP = 300
+
+    x_position_max_R = 5
+    y_position_max_R = 100
+
+    # Add graphs to the canvas
+    add_image_to_canvas(c, graph_buffer_hysteresis, x_position_hys, y_position_hys, width2)
+    add_image_to_canvas(c, graph_buffer_CNP, x_position_CNP, y_position_CNP, width2)
+    add_image_to_canvas(c, graph_buffer_max_R, x_position_max_R, y_position_max_R , width2)
+
+    # Save the PDF
+    c.save()
+    [print(c)]
+    print("PDF saved at:", file_path)
+
+
+
+# example
+
+env_list = [r'C:\Users\User\Documents\Git Repository\environmental data logs\2024-05-09\2024-05-09-00-00-04_environmental_data_.csv']
+sweeps_list = [r'C:\Users\User\Documents\Git Repository\logs\ID_190_element 1\2024-05-09']
+
+directory = r"C:\Users\User\Documents\Git Repository"
+create_report(sweeps_list, env_list, directory)
