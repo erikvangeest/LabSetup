@@ -1,3 +1,4 @@
+int additional_stabilization = 0;
 int klepMFC1 = 4;
 int klepMFC2 = 5;
 unsigned long time_hours = 3600000; // 1 hour in milliseconds = 3600000
@@ -18,7 +19,7 @@ Serial.println(0);
 //Serial.println(",");
 //Serial.println("start stabilization");
 delay(1 * time_hours);  //standard 1 hour stabilization
-delay(0 * time_hours);   // additional stabilization time
+delay(additional_stabilization * time_hours);   // additional stabilization time
 //Serial.println ("port closed");
 
 //step 1, high ethylene flow

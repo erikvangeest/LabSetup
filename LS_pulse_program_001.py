@@ -3,6 +3,7 @@ from time import sleep
 from matplotlib import pyplot as plt
 from datetime import datetime
 import os
+import subprocess
 
 
 from keithley import DMM6500
@@ -10,6 +11,44 @@ from keithley import Switch700X
 from rigol import DP2031
 from flogger import Flogger
 
+HEATING_PROGRAM = '009'		# Program 008 and higher are for heating on chip with receptor V2
+AIR_PROGRAM = '001'
+ETHYLENE_PROGRAM = '007'		# Ethylene program 007 and higher is for bypass valve. Dosing programs are '001', '002', etc. To open the ethylene flow immediately or close forever, use 'open' or 'closed' programs. 
+ENVIRONMENTAL_PROGRAM = '002'
+additional_stabilization = 10 # hours
+
+# log title - experiment information
+chip_identifier1 = 	"ID_308" 	# fill in chip number positioned in slot 1
+chip_identifier2 = 	"ID_293" 	# fill in chip number positioned in slot 2
+chip_identifier3 = 	"ID_319" 	# fill in chip number positioned in slot 3
+chip_identifier4 = 	"ID_292" 	# fill in chip number positioned in slot 4
+
+chip_identifier5 = 	"ID_" 	# fill in chip number positioned in slot 5
+chip_identifier6 = 	"ID_" 	# fill in chip number positioned in slot 6
+chip_identifier7 = 	"ID_" 	# fill in chip number positioned in slot 7
+
+conditions1 = 		"incubated complex" 		# fill in conditions 1		do not use - sign in the conditions!
+conditions2 = 		"incubated comoplex" 		# fill in conditions 2
+conditions3 = 		"incubated ligand" 		# fill in conditions 3
+conditions4 = 		"incubated ligand" 		# fill in conditions 4
+
+conditions5 = 		"" 		# fill in conditions 5
+conditions6 = 		"" 		# fill in conditions 6
+conditions7 = 		"" 		# fill in conditions 7
+
+
+AIR_PROGRAM_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/02_air_program/air_program_{AIR_PROGRAM}/LS_MFC2_air_program_{AIR_PROGRAM}.py'
+ETHYLENE_PROGRAM_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/03_ethylene_program/ethylene_program_{ETHYLENE_PROGRAM}/LS_MFC1_ethylene_program_{ETHYLENE_PROGRAM}.py'
+
+ETHYLENE_ARDUINO_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/03_ethylene_program/ethylene_program_{ETHYLENE_PROGRAM}/LS_valve_ethylene_program_{ETHYLENE_PROGRAM}/LS_valve_ethylene_program_{ETHYLENE_PROGRAM}.ino'
+ETHYLENE_ARDUINO_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/03_ethylene_program/ethylene_program_{ETHYLENE_PROGRAM}/LS_valve_ethylene_program_{ETHYLENE_PROGRAM}/LS_valve_ethylene_program_{ETHYLENE_PROGRAM}.ino'
+
+ETHYLENE_ARDUINO_PORT = 'COM20'
+
+HEATER_ARDUINO_PORT = 'COM22'
+HEATER_ARDUINO_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/01_heating_program/LS_heating_program_{HEATING_PROGRAM}/LS_heating_program_{HEATING_PROGRAM}.ino'
+
+ENVIRONMENTAL_PROGRAM_PATH = f'C:/Users/User/Documents/Git Repository/Master codes/04_environmental_data_collection/LS_environmental_sensor_data_{ENVIRONMENTAL_PROGRAM}/LS_environmental_sensor_data_{ENVIRONMENTAL_PROGRAM}.py'
 
 def perform_voltage_sweep(DMM, PSUChannel, v_vector, delay):
 	# create buffer for resistance measurements
@@ -46,6 +85,9 @@ def perform_symmetric_voltage_sweep(DMM, PSUChannel, v_vector, delay):
 	return [r_dmm_up, r_dmm_down[::-1]]
 
 		
+def flash_arduino(comport, arduino_path):
+	subprocess.run(['arduino-cli.exe', 'compile', '--fqbn', 'arduino:avr:uno', arduino_path])
+	subprocess.run(['arduino-cli.exe', 'upload', '-p', comport, '--fqbn', 'arduino:avr:uno', arduino_path])
 
 class GateSweepChannel:
 
@@ -139,6 +181,8 @@ class GateSweepChannel:
 		return [file_dir, file_name]
 
 
+
+
 # device addresses
 DMM_address = 'TCPIP0::192.168.10.77::inst0::INSTR'
 PSU_address = 'TCPIP0::192.168.10.73::inst0::INSTR'
@@ -159,6 +203,21 @@ v_gate_channel.set_output(1)
 v_gate_channel.set_voltage_current(0, 0.1)
 sleep(3)
 
+with open(ETHYLENE_ARDUINO_PATH, 'r') as f:
+	lines = f.readlines()
+
+lines[0] = f'int additional_stabilization = {additional_stabilization};\n'
+
+with open(ETHYLENE_ARDUINO_PATH, 'w') as f:
+	f.writelines(lines)
+
+flash_arduino(HEATER_ARDUINO_PORT, HEATER_ARDUINO_PATH)
+flash_arduino(ETHYLENE_ARDUINO_PORT, ETHYLENE_ARDUINO_PATH)
+
+# Start air program
+subprocess.Popen(['python', AIR_PROGRAM_PATH])
+subprocess.Popen(['python', ETHYLENE_PROGRAM_PATH, str(additional_stabilization)])
+subprocess.Popen(['python', ENVIRONMENTAL_PROGRAM_PATH])
 
 # sweep configuration
 v_sweep_start = 0
@@ -167,23 +226,6 @@ v_sweep_step = 100e-3 # half of 50 mV because of series output
 v_sweep_count = int((v_sweep_stop - v_sweep_start)/v_sweep_step)
 v_gate_vector = np.linspace(v_sweep_start, v_sweep_stop, v_sweep_count+1)
 psu_delay = 5e-6			# standard is 5e-6
-
-# log title - experiment information
-chip_identifier1 = 	"ID_168" 	# fill in chip number positioned in slot 1
-chip_identifier2 = 	"ID_215" 	# fill in chip number positioned in slot 2
-chip_identifier3 = 	"ID_208" 	# fill in chip number positioned in slot 3
-chip_identifier4 = 	"ID_226" 	# fill in chip number positioned in slot 4
-chip_identifier5 = 	"ID_" 	# fill in chip number positioned in slot 5
-chip_identifier6 = 	"ID_" 	# fill in chip number positioned in slot 6
-chip_identifier7 = 	"ID_" 	# fill in chip number positioned in slot 7
-
-conditions1 = 		"ANL clean drop cast 5x EG004 recryst, par" 		# fill in conditions 1		do not use - sign in the conditions!
-conditions2 = 		"ANL clean drop cast 5x EG004 recryst, par" 		# fill in conditions 2
-conditions3 = 		"ANL clean drop cast 5x EG004 recryst, par" 		# fill in conditions 3
-conditions4 = 		"receptor v2 test in setup" 		# fill in conditions 4
-conditions5 = 		"" 		# fill in conditions 5
-conditions6 = 		"" 		# fill in conditions 6
-conditions7 = 		"" 		# fill in conditions 7
 
 element1_sweeper = GateSweepChannel(DMM, v_gate_channel, Switch, 10, 1, f'{chip_identifier1}_element 1', f'{conditions1}')
 element1_sweeper.set_sweep_parameters(v_gate_vector, psu_delay)
@@ -263,19 +305,19 @@ element19_sweeper.set_log_directory('../logs')
 
 while(1):	
 	element1_sweeper.sweep_and_log()		# In case of parallel measurement on slot 1//drawer 1, only select element1
-	#element2_sweeper.sweep_and_log()
-	#element3_sweeper.sweep_and_log()
-	#element4_sweeper.sweep_and_log()
+	element2_sweeper.sweep_and_log()
+	element3_sweeper.sweep_and_log()
+	element4_sweeper.sweep_and_log()
 
 	element5_sweeper.sweep_and_log()		# In case of parallel measurement on slot 2//drawer 1, only select element5
-	#element6_sweeper.sweep_and_log()
-	#element7_sweeper.sweep_and_log()
-	#element8_sweeper.sweep_and_log()
+	element6_sweeper.sweep_and_log()
+	element7_sweeper.sweep_and_log()
+	element8_sweeper.sweep_and_log()
 
 	element9_sweeper.sweep_and_log()		# In case of parallel measurement on slot 3//drawer 1, only select element9
-	#element10_sweeper.sweep_and_log()
-	#element11_sweeper.sweep_and_log()
-	#element12_sweeper.sweep_and_log()
+	element10_sweeper.sweep_and_log()
+	element11_sweeper.sweep_and_log()
+	element12_sweeper.sweep_and_log()
 
 	element13_sweeper.sweep_and_log()		# In case of parallel measurement on slot 4//drawer 1, only select element13
 	element14_sweeper.sweep_and_log()

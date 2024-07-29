@@ -1,8 +1,12 @@
 import serial
 from time import sleep, strftime, localtime, time
 import csv
+import sys
 import os
 from datetime import datetime
+
+time_hours = 3600
+additional_stabilization = int(sys.argv[1]) * time_hours  
 
 class MassFlowController:
 
@@ -30,7 +34,7 @@ MFC1 = MassFlowController("COM17")
 time_hours = 3600
 
 # Define the root folder path
-root_folder = r'c:\Users\User\Documents\Git Repository\environmental data logs'
+root_folder = r'c:\Users\User\Documents\Git Repository\MFC logs'
 
 # Create a new folder with the current date as its name
 current_date = datetime.now().strftime("%Y-%m-%d")
@@ -49,13 +53,12 @@ with open(csv_filename, mode='w', newline='') as file:
 
 # Set the duration for the first loop (in hours)
 
-additional_stabilization = 0 * time_hours           # add extra stabilization time before start of ethylene dosing
-
 duration1 = 2 * time_hours + additional_stabilization         
 start_time1 = time()
 
 MFCvalue = 255
 MFC1.setValue(MFCvalue)
+print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
 
 try:
     while time() - start_time1 < duration1:
@@ -64,7 +67,7 @@ try:
             csv_writer = csv.writer(file)
             timestamp = strftime("%Y-%m-%d %H:%M:%S", localtime())
             csv_writer.writerow([timestamp, MFCvalue])
-            print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
+            
         sleep(10)
 
     # Set the duration for the second loop (200 seconds)
@@ -73,6 +76,7 @@ try:
     
     MFCvalue = 193
     MFC1.setValue(MFCvalue)
+    print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
 
     while time() - start_time2 < duration2:
 
@@ -80,7 +84,7 @@ try:
             csv_writer = csv.writer(file)
             timestamp = strftime("%Y-%m-%d %H:%M:%S", localtime())
             csv_writer.writerow([timestamp, MFCvalue])
-            print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
+            
         sleep(10)
 
     # Set the duration for the second loop (200 seconds)
@@ -89,6 +93,7 @@ try:
     
     MFCvalue = 175
     MFC1.setValue(MFCvalue)
+    print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
 
     while time() - start_time3 < duration3:
 
@@ -96,13 +101,14 @@ try:
             csv_writer = csv.writer(file)
             timestamp = strftime("%Y-%m-%d %H:%M:%S", localtime())
             csv_writer.writerow([timestamp, MFCvalue])
-            print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
+            
         sleep(10)
 
     start_time4 = time()
 
     MFCvalue = 0
     MFC1.setValue(MFCvalue)
+    print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
 
     while time() > start_time4:
 
@@ -110,7 +116,7 @@ try:
             csv_writer = csv.writer(file)
             timestamp = strftime("%Y-%m-%d %H:%M:%S", localtime())
             csv_writer.writerow([timestamp, MFCvalue])
-            print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
+            
         sleep(10)
 
 except KeyboardInterrupt:

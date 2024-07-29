@@ -1,6 +1,6 @@
 air_program_001
 
 fixed air flow
-air flow set to 100 ml/min
+air flow set to 140 ml/min
 
-MCF2 = 126
+MCF2 = 140

@@ -1,6 +1,8 @@
 LS_valve_ethylene_program_001.ino 	Arduino R3 UNO on COM 20
 	operated simultaneously with	LS_MFC1_ethylene_program_001.py
 
+Description: 3x pulse (0.5h) at HI, MID and LOW concentration, 1h stabilize between pulse series 
+Total duration: 10.5 hours
 
 ethylene_program_001 stages:
 
