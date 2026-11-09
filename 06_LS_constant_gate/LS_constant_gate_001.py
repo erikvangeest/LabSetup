@@ -12,28 +12,28 @@ from rigol import DP2031
 from flogger import Flogger, generateTimestampString
 import numpy as np
 
-HEATING_PROGRAM = '008'		# Program 008 and higher are for heating on chip with receptor V2
-ETHYLENE_PROGRAM = '011'		# Ethylene program 009 and higher is for bypass valve & double MFC logging. 
+HEATING_PROGRAM = 'cure'		# Program 008 and higher are for heating on chip with receptor V2
+ETHYLENE_PROGRAM = '013'		# Ethylene program 009 and higher is for bypass valve & double MFC logging. 
 ENVIRONMENTAL_PROGRAM = '002'
-additional_stabilization = 0 #hours
+additional_stabilization =  0 #hours
 
-gate_voltage = 10 # gate voltage set
+gate_voltage = 0 # gate voltage set
 
 
 # log title - experiment information
-chip_identifier1 = 	"ID_247" 	# fill in chip number positioned in slot 1
-chip_identifier2 = 	"ID_310" 	# fill in chip number positioned in slot 2 
-chip_identifier3 = 	"ID_177" 	# fill in chip number positioned in slot 3
-chip_identifier4 = 	"ID_263" 	# fill in chip number positioned in slot 4
+chip_identifier1 = 	"ID_097" 	# fill in chip number positioned in slot 1
+chip_identifier2 = 	"ID_098" 	# fill in chip number positioned in slot 2 
+chip_identifier3 = 	"ID_099" 	# fill in chip number positioned in slot 3
+chip_identifier4 = 	"ID_100" 	# fill in chip number positioned in slot 4
 
 chip_identifier5 = 	"ID_" 	# fill in chip number positioned in slot 5
 chip_identifier6 = 	"ID_" 	# fill in chip number positioned in slot 6
 chip_identifier7 = 	"ID_" 	# fill in chip number positioned in slot 7
 
-conditions1 = 		"spin coat 6krpm EG006 precip KroCo3 TBU DEP, flip die, individual" 		# fill in conditions 1		do not use - sign in the conditions!
-conditions2 = 		"spin coat 6krpm ligand KroCo3 TBU DEP, flipdie, individual" 		# fill in conditions 2
-conditions3 = 		"Ligand dropcast 4x diluted kroco tba, flipdie, individual" 		# fill in conditions 3
-conditions4 = 		"EG006 precip dropcast 4x diluted kroco tba, flipdie, individual" 		# fill in conditions 4
+conditions1 = 		"blot, solder ball, bis ethx adip cu KroCo3 1% TBA, flip die, individual" 		# fill in conditions 1		do not use - sign in the conditions!
+conditions2 = 		"blot, solder ball, bis ethx adip cu KroCo3 1% TBA, flip die, individual" 		# fill in conditions 2
+conditions3 = 		"blot, solder ball, bis ethx adip ligand KroCo3 1% TBA, flip die, individual" 		# fill in conditions 3
+conditions4 = 		"blot, solder ball, bis ethx adip ligand KroCo3 1% TBA, flip die, individual" 		# fill in conditions 4
 
 conditions5 = 		"" 		# fill in conditions 5
 conditions6 = 		"" 		# fill in conditions 6
@@ -51,7 +51,7 @@ HEATER_ARDUINO_PATH = rf'c:\Users\User\Documents\Git Repository\Master codes\01_
 ENVIRONMENTAL_PROGRAM_PATH = rf'c:\Users\User\Documents\Git Repository\Master codes\04_environmental_data_collection\LS_environmental_sensor_data_{ENVIRONMENTAL_PROGRAM}\LS_environmental_sensor_data_{ENVIRONMENTAL_PROGRAM}.py'
 
 
-PSU_address = "TCPIP0::192.168.10.73::inst0::INSTR"
+PSU_address = "TCPIP0::192.168.10.61::inst0::INSTR"
 PSU = DP2031(PSU_address)
 v_gate_channel = PSU.channel1
 
@@ -170,8 +170,8 @@ class MeasurementChannel:
 
 gpibAddress = "GPIB0::7::INSTR"
 usbAddress = "USB0::0x05E6::0x6500::04583480::INSTR"
-PSU_address = 'TCPIP0::192.168.10.73::inst0::INSTR'
-DMM_address = 'TCPIP0::192.168.10.77::inst0::INSTR'
+PSU_address = 'TCPIP0::192.168.10.61::inst0::INSTR'
+DMM_address = 'TCPIP0::192.168.10.71::inst0::INSTR'
 
 with open(ETHYLENE_ARDUINO_PATH, 'r') as f:
 	lines = f.readlines()
@@ -200,7 +200,7 @@ PSU = DP2031(PSU_address)
 logDir = "./logs/"
 logFileBase = "multimeter_log"
 fileTimeStamp = generateTimestampString()
-logFile = logDir + fileTimeStamp + logFileBase + ".csv" 
+logFile = fileTimeStamp + logFileBase + ".csv" 
 DataLogger = Flogger(logFile, ",")
 DataLogger.createFile()
 
@@ -245,14 +245,14 @@ SampleChannel16 = MeasurementChannel(channel16Flogger, Keithley6500, Keithley700
 
 sampleChannels = []
 
-sampleChannels.append(SampleChannel1)
+'''sampleChannels.append(SampleChannel1)
 sampleChannels.append(SampleChannel2)
 sampleChannels.append(SampleChannel3)
 sampleChannels.append(SampleChannel4)
 sampleChannels.append(SampleChannel5)
 sampleChannels.append(SampleChannel6)
 sampleChannels.append(SampleChannel7)
-sampleChannels.append(SampleChannel8)
+sampleChannels.append(SampleChannel8)'''
 
 sampleChannels.append(SampleChannel9)
 sampleChannels.append(SampleChannel10)

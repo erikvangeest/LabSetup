@@ -1562,10 +1562,10 @@ def create_report_cloud(year, month, start_day, end_day, start_hour, end_hour, f
     
 
 # make sure data starts at one oclock otherwise baseline fitting will not work properly
-start_hour = 0
-end_hour = 9
-start_day = 26
-end_day = 26
+start_hour = 14
+end_hour = 15
+start_day = 29
+end_day = 29
 month= 7
 
 receptor = 'Receptor1'
@@ -1573,7 +1573,7 @@ chip_ID = '133'
 
 
 file_path = rf'C:\Users\User\Documents\Git Repository\{chip_ID}_report.pdf'
-create_report_cloud(2024, 7, 28, 0, 0, 0, file_path, chip_ID, receptor)
+create_report_cloud(2024, month, start_day, end_day, start_hour, end_hour, file_path, chip_ID, receptor)
 import inspect
 
 #print(inspect.getsource(get_data))

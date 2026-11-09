@@ -1,0 +1,13 @@
+{
+  "name": "Experiment_20241213.1",
+  "version": "1.0",
+  "start_time": "now",
+  "schedule": "schedule_3",
+  "receptors": {
+    "slot_1_uid": "132",
+    "slot_2_uid": "136",
+    "slot_3_uid": "134",
+    "slot_4_uid": "135"
+  },
+  "note": "LS" 
+}

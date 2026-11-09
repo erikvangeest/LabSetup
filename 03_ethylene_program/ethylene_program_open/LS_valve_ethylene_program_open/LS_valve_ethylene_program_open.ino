@@ -1,4 +1,4 @@
-int additional_stabilization = 6;
+int additional_stabilization = 0;
 int klepMFC1 = 4;
 int klepMFC2 = 5;
 unsigned long time_hours = 3600000; // 1 hour in milliseconds = 3600000

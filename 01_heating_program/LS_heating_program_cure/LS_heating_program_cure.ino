@@ -133,8 +133,8 @@ void loop(void) {
 
 looptijd = millis()/(60000);
 
-if (looptijd <15) Setpoint = 65; 
-if (looptijd >60) Setpoint = 25; 
+if (looptijd <15) Setpoint = 80; 
+if (looptijd >15) Setpoint = 25; 
 
   
   uint8_t i1;

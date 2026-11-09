@@ -121,7 +121,8 @@ def create_plots(data_df, output_folder, id_prefix, element_identifier, date, pl
         plt.savefig(plot_filename)
 
         # Set the x-axis formatter to show only hours
-        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))    
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        plt.close()    
 
 # Main directory containing subfolders with combinations
 main_directory = r'c:\Users\User\Documents\Git Repository\logs'

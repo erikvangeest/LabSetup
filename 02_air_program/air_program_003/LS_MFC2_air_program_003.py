@@ -107,7 +107,7 @@ try:
     MFCvalue = 140
     MFC1.setValue(MFCvalue)
     print(f'Timestamp: {timestamp}, MFC1 Value: {MFCvalue}')
-
+    
     while time() > start_time4:
 
         with open(csv_filename, mode='a', newline='') as file:

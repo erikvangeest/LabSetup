@@ -47,7 +47,7 @@ with open(csv_filename, mode='w', newline='') as file:
     csv_writer = csv.writer(file)
     csv_writer.writerow(["Timestamp", "MFC2 Value"])
 
-MFCvalue = 0
+MFCvalue = 140
 MFC1.setValue(MFCvalue)
 
 try:

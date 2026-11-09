@@ -35,7 +35,9 @@ MFC1 = MassFlowController("COM17")
 MFC2 = MassFlowController("COM18")
 
 # Define the root folder path
-root_folder = r'c:\Users\User\Documents\Git Repository\MFC logs'
+
+#root_folder = r'c:\Users\User\Documents\Git Repository\MFC logs'
+root_folder = r'c:\Users\User\OneDrive - SmartSense BV\2 Product Team\Product Development Team\Wafer dies\MFC logs'
 
 
 # Function to create a new folder for the current date
@@ -64,8 +66,8 @@ csv_filename = create_new_csv_file(current_folder_path)
 duration1 = additional_stabilization     
 start_time1 = time()
 
-MFC1value = 0      
-MFC2value = 140
+MFC1value = 0  
+MFC2value = 140    # normal = 140
 
 MFC1.setValue(MFC1value)
 MFC2.setValue(MFC2value)
